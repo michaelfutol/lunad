@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { Map as MapLibreMap, Marker } from 'maplibre-gl';
+import { LocationChooser } from '@/components/LocationChooser';
 import type { LngLat, RouteMode, RouteResult } from '@/lib/geo';
 
 type Place = LngLat & { label: string };
+type Target = 'pickup' | 'dropoff';
 
 const MAGDALENA_CENTER: [number, number] = [124.1075, 12.6463];
 const SATELLITE_STYLE: maplibregl.StyleSpecification = {
@@ -27,21 +29,15 @@ export function PassengerMap() {
   const pickupMarker = useRef<Marker | null>(null);
   const dropoffMarker = useRef<Marker | null>(null);
 
-  const [pickup, setPickup] = useState<Place>({
-    label: 'Sta. Magdalena Municipal Hall',
-    lng: 124.10724,
-    lat: 12.64599,
-  });
-  const [dropoff, setDropoff] = useState<Place>({
-    label: 'Santa Magdalena Public Market',
-    lng: 124.10775,
-    lat: 12.64583,
-  });
+  const [pickup, setPickup] = useState<Place>({ label: 'Sta. Magdalena Municipal Hall', lng: 124.10724, lat: 12.64599 });
+  const [dropoff, setDropoff] = useState<Place>({ label: 'Santa Magdalena Public Market', lng: 124.10775, lat: 12.64583 });
   const [mode, setMode] = useState<RouteMode>('tricycle');
   const [layer, setLayer] = useState<'satellite' | 'street'>('satellite');
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [routing, setRouting] = useState(false);
-  const [pinTarget, setPinTarget] = useState<'pickup' | 'dropoff' | null>(null);
+  const [routeError, setRouteError] = useState('');
+  const [pinTarget, setPinTarget] = useState<Target | null>(null);
+  const [chooserTarget, setChooserTarget] = useState<Target | null>(null);
 
   const modeLabel = useMemo(
     () => mode === 'padyak' ? 'Padyak' : mode === 'etrike' ? 'E-Trike' : 'Tricycle',
@@ -50,36 +46,19 @@ export function PassengerMap() {
 
   useEffect(() => {
     if (!mapHost.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: mapHost.current,
-      style: SATELLITE_STYLE,
-      center: MAGDALENA_CENTER,
-      zoom: 16,
-    });
+    const map = new maplibregl.Map({ container: mapHost.current, style: SATELLITE_STYLE, center: MAGDALENA_CENTER, zoom: 16 });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-    map.addControl(new maplibregl.GeolocateControl({
-      positionOptions: { enableHighAccuracy: true },
-      trackUserLocation: true,
-    }), 'bottom-right');
     mapRef.current = map;
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
+    return () => { map.remove(); mapRef.current = null; };
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const handler = (event: maplibregl.MapMouseEvent) => {
+    const handler = async (event: maplibregl.MapMouseEvent) => {
       if (!pinTarget) return;
-      const point: Place = {
-        lng: event.lngLat.lng,
-        lat: event.lngLat.lat,
-        label: `Pinned · ${event.lngLat.lat.toFixed(5)}, ${event.lngLat.lng.toFixed(5)}`,
-      };
-      if (pinTarget === 'pickup') setPickup(point);
-      else setDropoff(point);
+      const point = await reverseGeocode(event.lngLat.lat, event.lngLat.lng);
+      if (pinTarget === 'pickup') setPickup(point); else setDropoff(point);
       setPinTarget(null);
     };
     map.on('click', handler);
@@ -99,21 +78,24 @@ export function PassengerMap() {
     dropoffMarker.current?.remove();
 
     pickupMarker.current = new maplibregl.Marker({ color: '#0b684d', draggable: true })
-      .setLngLat([pickup.lng, pickup.lat])
-      .addTo(map);
+      .setLngLat([pickup.lng, pickup.lat]).addTo(map);
     dropoffMarker.current = new maplibregl.Marker({ color: '#d07a00', draggable: true })
-      .setLngLat([dropoff.lng, dropoff.lat])
-      .addTo(map);
+      .setLngLat([dropoff.lng, dropoff.lat]).addTo(map);
 
-    pickupMarker.current.on('dragend', () => {
+    pickupMarker.current.on('dragend', async () => {
       const p = pickupMarker.current!.getLngLat();
-      setPickup({ lng: p.lng, lat: p.lat, label: `Pinned · ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` });
+      setPickup(await reverseGeocode(p.lat, p.lng));
     });
-    dropoffMarker.current.on('dragend', () => {
+    dropoffMarker.current.on('dragend', async () => {
       const p = dropoffMarker.current!.getLngLat();
-      setDropoff({ lng: p.lng, lat: p.lat, label: `Pinned · ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` });
+      setDropoff(await reverseGeocode(p.lat, p.lng));
     });
   }, [pickup, dropoff]);
+
+  useEffect(() => {
+    setRoute(null);
+    setRouteError('');
+  }, [pickup.lng, pickup.lat, dropoff.lng, dropoff.lat, mode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -133,7 +115,7 @@ export function PassengerMap() {
         type: 'line',
         source: 'route',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#19e68c', 'line-width': 6, 'line-opacity': 0.9 },
+        paint: { 'line-color': '#19e68c', 'line-width': 6, 'line-opacity': 0.92 },
       });
 
       const coords = route.geometry.coordinates;
@@ -141,10 +123,7 @@ export function PassengerMap() {
         const start = coords[0];
         const bounds = new maplibregl.LngLatBounds(start, start);
         coords.forEach((coord) => bounds.extend(coord));
-        map.fitBounds(bounds, {
-          padding: { top: 100, right: 42, bottom: 360, left: 42 },
-          maxZoom: 17,
-        });
+        map.fitBounds(bounds, { padding: { top: 100, right: 42, bottom: 360, left: 42 }, maxZoom: 17 });
       }
     };
 
@@ -152,9 +131,39 @@ export function PassengerMap() {
     else map.once('styledata', drawRoute);
   }, [route, layer]);
 
+  async function reverseGeocode(lat: number, lng: number): Promise<Place> {
+    try {
+      const response = await fetch(`/api/geocode?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`);
+      if (!response.ok) throw new Error('reverse unavailable');
+      return await response.json();
+    } catch {
+      return { lat, lng, label: `Pinned · ${lat.toFixed(5)}, ${lng.toFixed(5)}` };
+    }
+  }
+
+  function choosePlace(target: Target, place: Place) {
+    if (target === 'pickup') setPickup(place); else setDropoff(place);
+    setChooserTarget(null);
+    mapRef.current?.flyTo({ center: [place.lng, place.lat], zoom: 17 });
+  }
+
+  function startPin(target: Target) {
+    setChooserTarget(null);
+    setPinTarget(target);
+  }
+
+  function useGps(target: Target) {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      const place = await reverseGeocode(coords.latitude, coords.longitude);
+      choosePlace(target, place);
+    }, () => undefined, { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 });
+  }
+
   async function calculateRoute() {
     setRouting(true);
     setRoute(null);
+    setRouteError('');
     try {
       const response = await fetch('/api/route', {
         method: 'POST',
@@ -164,7 +173,7 @@ export function PassengerMap() {
       if (!response.ok) throw new Error('Routing is temporarily unavailable');
       setRoute(await response.json());
     } catch {
-      setRoute(null);
+      setRouteError('Road routing is temporarily unavailable. LUNAD will never substitute a fake straight-line route.');
     } finally {
       setRouting(false);
     }
@@ -173,7 +182,6 @@ export function PassengerMap() {
   return (
     <main className="app-shell">
       <div ref={mapHost} className="map" />
-
       <header className="app-bar">
         <div className="brand-mark">L</div>
         <div><strong>LUNAD</strong><small>Sta. Magdalena Mobility Lab</small></div>
@@ -191,15 +199,11 @@ export function PassengerMap() {
         <h1>Saan tayo?</h1>
 
         <div className="location-card">
-          <button className="location-row" onClick={() => setPinTarget('pickup')}>
-            <span className="pin green">●</span>
-            <span><small>Pickup</small><b>{pickup.label}</b></span>
-            <em>MAP</em>
+          <button className="location-row" onClick={() => setChooserTarget('pickup')}>
+            <span className="pin green">●</span><span><small>Pickup</small><b>{pickup.label}</b></span><em>SET</em>
           </button>
-          <button className="location-row" onClick={() => setPinTarget('dropoff')}>
-            <span className="pin amber">◆</span>
-            <span><small>Destination</small><b>{dropoff.label}</b></span>
-            <em>MAP</em>
+          <button className="location-row" onClick={() => setChooserTarget('dropoff')}>
+            <span className="pin amber">◆</span><span><small>Destination</small><b>{dropoff.label}</b></span><em>SET</em>
           </button>
         </div>
 
@@ -212,17 +216,22 @@ export function PassengerMap() {
         <button className="route-button" disabled={routing} onClick={calculateRoute}>
           {routing ? 'Finding road route…' : route ? 'Refresh itinerary' : `Show ${modeLabel} itinerary`}
         </button>
-
-        {route && (
-          <div className="route-summary">
-            <b>{(route.distanceMeters / 1000).toFixed(2)} km</b>
-            <span>≈ {Math.max(1, Math.round(route.durationSeconds / 60))} min · road-following route</span>
-          </div>
-        )}
+        {route && <div className="route-summary"><b>{(route.distanceMeters / 1000).toFixed(2)} km</b><span>≈ {Math.max(1, Math.round(route.durationSeconds / 60))} min · road-following route</span></div>}
+        {routeError && <p className="route-error">{routeError}</p>}
 
         <button className="request-button" disabled={!route}>Request {modeLabel}</button>
         <small className="lab-note">Controlled pre-alpha. No official fare is shown until field/LGU validation.</small>
       </section>
+
+      {chooserTarget && (
+        <LocationChooser
+          title={chooserTarget === 'pickup' ? 'Set pickup' : 'Set destination'}
+          onClose={() => setChooserTarget(null)}
+          onSelect={(place) => choosePlace(chooserTarget, place)}
+          onPickMap={() => startPin(chooserTarget)}
+          onUseGps={chooserTarget === 'pickup' ? () => useGps('pickup') : undefined}
+        />
+      )}
     </main>
   );
 }
