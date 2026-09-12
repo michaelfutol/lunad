@@ -1,0 +1,33 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies / builds
+node_modules/
+dist/
+.next/
+coverage/
+
+# Local databases and uploads
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+private/
+
+# Logs / caches
+*.log
+.cache/
+.vite/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Production-sensitive exports
+permit-scans/
+driver-documents/
+passenger-data/
