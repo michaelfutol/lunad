@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import maplibregl, { Map as MapLibreMap, Marker } from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import { LocationChooser } from '@/components/LocationChooser';
 import type { LngLat, RouteMode, RouteResult } from '@/lib/geo';
 
@@ -25,9 +25,9 @@ const STREET_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 
 export function PassengerMap() {
   const mapHost = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const pickupMarker = useRef<Marker | null>(null);
-  const dropoffMarker = useRef<Marker | null>(null);
+  const mapRef = useRef<maplibregl.Map | null>(null);
+  const pickupMarker = useRef<maplibregl.Marker | null>(null);
+  const dropoffMarker = useRef<maplibregl.Marker | null>(null);
 
   const [pickup, setPickup] = useState<Place>({ label: 'Sta. Magdalena Municipal Hall', lng: 124.10724, lat: 12.64599 });
   const [dropoff, setDropoff] = useState<Place>({ label: 'Santa Magdalena Public Market', lng: 124.10775, lat: 12.64583 });
@@ -77,17 +77,20 @@ export function PassengerMap() {
     pickupMarker.current?.remove();
     dropoffMarker.current?.remove();
 
-    pickupMarker.current = new maplibregl.Marker({ color: '#0b684d', draggable: true })
+    const nextPickupMarker = new maplibregl.Marker({ color: '#0b684d', draggable: true })
       .setLngLat([pickup.lng, pickup.lat]).addTo(map);
-    dropoffMarker.current = new maplibregl.Marker({ color: '#d07a00', draggable: true })
+    const nextDropoffMarker = new maplibregl.Marker({ color: '#d07a00', draggable: true })
       .setLngLat([dropoff.lng, dropoff.lat]).addTo(map);
 
-    pickupMarker.current.on('dragend', async () => {
-      const p = pickupMarker.current!.getLngLat();
+    pickupMarker.current = nextPickupMarker;
+    dropoffMarker.current = nextDropoffMarker;
+
+    nextPickupMarker.on('dragend', async () => {
+      const p = nextPickupMarker.getLngLat();
       setPickup(await reverseGeocode(p.lat, p.lng));
     });
-    dropoffMarker.current.on('dragend', async () => {
-      const p = dropoffMarker.current!.getLngLat();
+    nextDropoffMarker.on('dragend', async () => {
+      const p = nextDropoffMarker.getLngLat();
       setDropoff(await reverseGeocode(p.lat, p.lng));
     });
   }, [pickup, dropoff]);
