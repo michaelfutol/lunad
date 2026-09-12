@@ -9,6 +9,38 @@ function isPoint(value: unknown): value is LngLat {
   return typeof p.lng === 'number' && typeof p.lat === 'number' && Number.isFinite(p.lng) && Number.isFinite(p.lat);
 }
 
+function decodePolyline6(encoded: string): [number, number][] {
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  const coordinates: [number, number][] = [];
+
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte: number;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+    result = 0;
+    shift = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+    coordinates.push([lng / 1e6, lat / 1e6]);
+  }
+
+  return coordinates;
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as null | {
     pickup?: unknown;
@@ -33,7 +65,7 @@ export async function POST(req: NextRequest) {
     costing: costingFor(mode),
     units: 'kilometers',
     directions_options: { units: 'kilometers' },
-    shape_format: 'geojson',
+    shape_format: 'polyline6',
   };
 
   try {
@@ -55,19 +87,19 @@ export async function POST(req: NextRequest) {
     const summary = data?.trip?.summary;
     const shape = data?.trip?.legs?.[0]?.shape;
 
-    if (!summary || !shape) {
+    if (!summary || typeof shape !== 'string' || !shape.length) {
       return NextResponse.json({ error: 'ROUTER_RESPONSE_UNSUPPORTED' }, { status: 502 });
     }
 
-    const geometry = typeof shape === 'string' ? JSON.parse(shape) : shape;
-    if (geometry?.type !== 'LineString' || !Array.isArray(geometry?.coordinates)) {
+    const coordinates = decodePolyline6(shape);
+    if (coordinates.length < 2) {
       return NextResponse.json({ error: 'ROUTER_GEOMETRY_UNSUPPORTED' }, { status: 502 });
     }
 
     return NextResponse.json({
       distanceMeters: Math.round(Number(summary.length || 0) * 1000),
       durationSeconds: Math.round(Number(summary.time || 0)),
-      geometry,
+      geometry: { type: 'LineString', coordinates },
       provider: endpoint.includes('openstreetmap.de') ? 'valhalla-demo' : 'valhalla',
     });
   } catch (error) {
