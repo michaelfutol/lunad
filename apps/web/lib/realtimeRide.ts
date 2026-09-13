@@ -40,6 +40,19 @@ export type RideOffer = {
   expires_at: string;
 };
 
+export type LabContext = { organizationId: string; municipalityId: string };
+
+export async function getMagdalenaLabContext(): Promise<LabContext> {
+  const supabase = getSupabaseBrowserClient();
+  const [{ data: org, error: orgError }, { data: municipality, error: muniError }] = await Promise.all([
+    supabase.from('organizations').select('id').eq('code', 'LUNAD').single(),
+    supabase.from('municipalities').select('id').eq('code', 'SOR-MAG').single(),
+  ]);
+  if (orgError) throw orgError;
+  if (muniError) throw muniError;
+  return { organizationId: String(org.id), municipalityId: String(municipality.id) };
+}
+
 export async function createRealtimeRide(input: {
   organizationId: string;
   municipalityId: string;
@@ -67,6 +80,24 @@ export async function createRealtimeRide(input: {
   });
   if (error) throw error;
   return data as RealtimeRide;
+}
+
+export async function dispatchRealtimeOffer(input: {
+  rideId: string;
+  driverId: string;
+  vehicleId: string;
+  expiresSeconds?: number;
+}): Promise<RideOffer> {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase.rpc('dispatch_offer_to_driver', {
+    p_ride_id: input.rideId,
+    p_driver_id: input.driverId,
+    p_vehicle_id: input.vehicleId,
+    p_expires_seconds: input.expiresSeconds ?? 25,
+    p_reason: 'M2_LAB_DISPATCH',
+  });
+  if (error) throw error;
+  return data as RideOffer;
 }
 
 export async function acceptRealtimeOffer(offerId: string): Promise<RealtimeRide> {
@@ -119,44 +150,28 @@ export function subscribeToRide(
 ): () => void {
   const supabase = getSupabaseBrowserClient();
   const channels: RealtimeChannel[] = [];
-
   const rideChannel = supabase
     .channel(`ride:${rideId}`)
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'ride_requests', filter: `id=eq.${rideId}` },
-      (payload) => onRide(payload.new as RealtimeRide),
-    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ride_requests', filter: `id=eq.${rideId}` }, (payload) => onRide(payload.new as RealtimeRide))
     .subscribe();
   channels.push(rideChannel);
 
   if (onEvent) {
     const eventChannel = supabase
       .channel(`ride-events:${rideId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'ride_events', filter: `ride_request_id=eq.${rideId}` },
-        (payload) => onEvent(payload.new as Record<string, unknown>),
-      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ride_events', filter: `ride_request_id=eq.${rideId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))
       .subscribe();
     channels.push(eventChannel);
   }
 
-  return () => {
-    channels.forEach((channel) => void supabase.removeChannel(channel));
-  };
+  return () => { channels.forEach((channel) => void supabase.removeChannel(channel)); };
 }
 
 export function subscribeToMyOffers(onOffer: (offer: RideOffer) => void): () => void {
   const supabase = getSupabaseBrowserClient();
   const channel = supabase
     .channel('driver:offers')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'ride_offers' },
-      (payload) => onOffer(payload.new as RideOffer),
-    )
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ride_offers' }, (payload) => onOffer(payload.new as RideOffer))
     .subscribe();
-
   return () => void supabase.removeChannel(channel);
 }
