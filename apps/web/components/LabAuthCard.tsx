@@ -36,16 +36,26 @@ export function LabAuthCard({ roleLabel, children }: { roleLabel: string; childr
     setMessage('Creating test login…');
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            is_test_user: true,
+            full_name: roleLabel,
+            preferred_name: roleLabel,
+          },
+        },
+      });
       if (error) throw error;
-      setMessage('Account created. If email confirmation is enabled, confirm it before signing in.');
+      setMessage('Test account created. If email confirmation is enabled, confirm it before signing in.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Sign-up failed');
     }
   }
 
   if (!configured) {
-    return <div className="lab-auth-card"><b>{roleLabel}</b><p>Supabase is not configured on this deployment yet. The UI is ready; add the project URL and publishable key to activate realtime.</p></div>;
+    return <div className="lab-auth-card"><b>{roleLabel}</b><p>Supabase is not configured on this deployment yet.</p></div>;
   }
 
   if (user) return <>{children(user)}</>;
